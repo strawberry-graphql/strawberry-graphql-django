@@ -41,6 +41,7 @@ from strawberry_django.relay import ListConnectionWithTotalCount
 
 from .models import (
     Assignee,
+    BugReproduction,
     Favorite,
     FavoriteQuerySet,
     Issue,
@@ -49,6 +50,7 @@ from .models import (
     Project,
     Quiz,
     Tag,
+    Version,
 )
 
 UserModel = cast(Type[AbstractUser], get_user_model())
@@ -215,6 +217,16 @@ class FavoriteType(relay.Node):
         return queryset.by_user(info.context.request.user)
 
 
+@strawberry_django.type(Version)
+class VersionType(relay.Node):
+    name: strawberry.auto
+
+
+@strawberry_django.type(BugReproduction)
+class BugReproductionType(relay.Node):
+    description: strawberry.auto
+
+
 @strawberry_django.type(Issue)
 class IssueType(relay.Node, Named):
     milestone: MilestoneType
@@ -228,6 +240,8 @@ class IssueType(relay.Node, Named):
     favorite_set: ListConnectionWithTotalCount["FavoriteType"] = (
         strawberry_django.connection()
     )
+    versions: List["VersionType"]
+    bug_reproduction: BugReproductionType
 
     @strawberry_django.field(select_related="milestone", only="milestone__name")
     def milestone_name(self) -> str:
@@ -282,11 +296,15 @@ class TagInputPartial(NodeInputPartial):
 @strawberry_django.input(Issue)
 class IssueInput:
     name: strawberry.auto
-    milestone: "MilestoneInputPartial"
     priority: strawberry.auto
     kind: strawberry.auto
     tags: Optional[List[NodeInput]]
     extra: Optional[str] = strawberry.field(default=UNSET, graphql_type=Optional[int])
+
+
+@strawberry_django.input(Issue)
+class IssueInputWithMilestones(IssueInput):
+    milestone: "MilestoneInputPartial"
 
 
 @strawberry_django.type(Assignee)
@@ -311,18 +329,14 @@ class AssigneeInputPartial(NodeInputPartial):
     through_defaults: Optional[AssigneeThroughInputPartial] = strawberry.UNSET
 
 
-@strawberry_django.partial(Issue)
-class IssueInputPartial(NodeInput, IssueInput):
-    tags: Optional[ListInput[TagInputPartial]] = UNSET  # type: ignore
-    assignees: Optional[ListInput[AssigneeInputPartial]] = UNSET
-    issue_assignees: Optional[ListInput[IssueAssigneeInputPartial]] = UNSET
+@strawberry_django.partial(Version)
+class VersionInputPartial(NodeInputPartial):
+    name: strawberry.auto
 
 
-@strawberry_django.partial(Issue)
-class IssueInputPartialWithoutId(IssueInput):
-    tags: Optional[ListInput[TagInputPartial]] = UNSET  # type: ignore
-    assignees: Optional[ListInput[AssigneeInputPartial]] = UNSET
-    issue_assignees: Optional[ListInput[IssueAssigneeInputPartial]] = UNSET
+@strawberry_django.partial(BugReproduction)
+class BugReproductionInputPartial(NodeInputPartial):
+    description: strawberry.auto
 
 
 @strawberry_django.input(Issue)
@@ -336,6 +350,11 @@ class ProjectInputPartial(NodeInputPartial):
     milestones: Optional[List["MilestoneInputPartial"]]
 
 
+@strawberry_django.partial(Project)
+class ProjectWithMilestoneListInputPartial(ProjectInputPartial):
+    milestones: Optional[ListInput["MilestoneInputPartial"]]
+
+
 @strawberry_django.input(Milestone)
 class MilestoneInput:
     name: strawberry.auto
@@ -346,6 +365,28 @@ class MilestoneInput:
 @strawberry_django.partial(Milestone)
 class MilestoneInputPartial(NodeInputPartial):
     name: strawberry.auto
+    project: Optional[ProjectInputPartial]
+    issues: Optional[List["IssueInputPartialWithoutId"]]
+
+
+@strawberry_django.partial(Issue)
+class IssueInputPartial(NodeInput, IssueInputWithMilestones):
+    tags: Optional[ListInput[TagInputPartial]] = UNSET  # type: ignore
+    assignees: Optional[ListInput[AssigneeInputPartial]] = UNSET
+    issue_assignees: Optional[ListInput[IssueAssigneeInputPartial]] = UNSET
+    versions: Optional[ListInput[VersionInputPartial]] = UNSET
+    milestone: Optional[MilestoneInputPartial] = UNSET
+    bug_reproduction: Optional[BugReproductionInputPartial] = UNSET
+
+
+@strawberry_django.partial(Issue)
+class IssueInputPartialWithoutId(IssueInputWithMilestones):
+    tags: Optional[ListInput[TagInputPartial]] = UNSET  # type: ignore
+    assignees: Optional[ListInput[AssigneeInputPartial]] = UNSET
+    issue_assignees: Optional[ListInput[IssueAssigneeInputPartial]] = UNSET
+    versions: Optional[ListInput[VersionInputPartial]] = UNSET
+    milestone: Optional[MilestoneInputPartial] = UNSET
+    bug_reproduction: Optional[BugReproductionInputPartial] = UNSET
 
 
 @strawberry.type
@@ -477,7 +518,7 @@ class Mutation:
     """All available mutations for this schema."""
 
     create_issue: IssueType = mutations.create(
-        IssueInput,
+        IssueInputWithMilestones,
         handle_django_errors=True,
         argument_name="input",
     )
@@ -505,6 +546,11 @@ class Mutation:
     )
     update_project: ProjectType = mutations.update(
         ProjectInputPartial,
+        handle_django_errors=True,
+        argument_name="input",
+    )
+    update_project_with_milestone_list: ProjectType = mutations.update(
+        ProjectWithMilestoneListInputPartial,
         handle_django_errors=True,
         argument_name="input",
     )
@@ -557,6 +603,7 @@ class Mutation:
         self,
         info: Info,
         title: str,
+        pk: Optional[strawberry.ID] = UNSET,
         full_clean_options: bool = False,
     ) -> QuizType:
         return cast(
@@ -564,7 +611,7 @@ class Mutation:
             resolvers.create(
                 info,
                 Quiz,
-                {"title": title},
+                {"id": pk, "title": title},
                 full_clean={"exclude": ["sequence"]} if full_clean_options else True,
                 key_attr="id",
             ),

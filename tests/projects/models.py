@@ -114,8 +114,11 @@ class Favorite(models.Model):
     objects = FavoriteQuerySet.as_manager()
 
 
+class BugReproduction(models.Model):
+    description = models.TextField()
+
+
 class Issue(NamedModel):
-    comments: "RelatedManager[Issue]"
     issue_assignees: "RelatedManager[Assignee]"
 
     class Kind(models.TextChoices):
@@ -160,6 +163,13 @@ class Issue(NamedModel):
         through="Assignee",
         related_name="+",
     )
+    bug_reproduction = models.OneToOneField["BugReproduction"](
+        "BugReproduction",
+        null=True,
+        blank=True,
+        related_name="issue",
+        on_delete=models.CASCADE,
+    )
 
     @property
     def name_with_kind(self) -> str:
@@ -169,6 +179,21 @@ class Issue(NamedModel):
     def name_with_priority(self) -> str:
         """Field doc."""
         return f"{self.kind}: {self.priority}"
+
+
+class Version(NamedModel):
+    issue_id: int
+    issue = models.ForeignKey[Issue](
+        Issue,
+        on_delete=models.CASCADE,
+        related_name="versions",
+        related_query_name="version",
+    )
+
+    class Meta:
+        unique_together = [  # noqa: RUF012
+            ("name", "issue")
+        ]
 
 
 class Assignee(models.Model):
@@ -202,13 +227,15 @@ class Assignee(models.Model):
     )
 
 
-class Tag(NamedModel):
+class Tag(models.Model):
     issues: "RelatedManager[Issue]"
 
     id = models.BigAutoField(
         verbose_name="ID",
         primary_key=True,
     )
+
+    name = models.CharField(max_length=255, unique=True)
 
 
 class Quiz(models.Model):

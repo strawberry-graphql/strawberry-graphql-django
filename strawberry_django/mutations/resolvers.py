@@ -76,7 +76,7 @@ def _parse_pk(
 
         if key_attr in value:
             obj_pk = value[key_attr]
-            if obj_pk is not strawberry.UNSET:
+            if obj_pk not in (None, UNSET):  # noqa: PLR6201
                 return model._default_manager.get(pk=obj_pk), value
 
         return None, value
@@ -99,8 +99,9 @@ def _parse_data(
                 continue
 
             if isinstance(v, ParsedObject):
-                if v.pk is None:
-                    v = create(info, model, v.data or {})  # noqa: PLW2901
+                if v.pk in (None, UNSET):  # noqa: PLR6201
+                    related_model = get_model_fields(model).get(k).related_model
+                    v = create(info, related_model, v.data or {})  # noqa: PLW2901
                 elif isinstance(v.pk, models.Model) and v.data:
                     v = update(info, v.pk, v.data, key_attr=key_attr)  # noqa: PLW2901
                 else:
@@ -178,6 +179,9 @@ def parse_input(
         )
 
     if isinstance(data, (OneToOneInput, OneToManyInput)):
+        if not data.set:
+            return None
+
         return ParsedObject(
             pk=parse_input(info, data.set, key_attr=key_attr),
         )
@@ -239,6 +243,12 @@ def prepare_create_update(
 
     if dataclasses.is_dataclass(data):
         data = vars(data)
+
+    # `pk` may be explicitly passed as `None` to force create object, `pk` is not a field and won't be handled below,
+    # so manually add one into `direct_field_values`
+    pk = data.pop("pk", UNSET)
+    if pk is not UNSET:
+        direct_field_values["pk"] = pk
 
     for name, value in data.items():
         field = fields.get(name)
@@ -366,16 +376,24 @@ def create(
         key_attr=key_attr,
     )
 
-    # Creating the instance directly via create() without full-clean will
-    # raise ugly error messages. To generate user-friendly ones, we want
-    # full-clean() to trigger form-validation style error messages.
-    full_clean_options = full_clean if isinstance(full_clean, dict) else {}
-    if full_clean:
+    try:
+        # Instead of using `get_or_create` shortcut first use `get()`
+        # (which will also raise `DoesNotExist` in case pk `None` value explicitly
+        # passed), if no records found - invoke `full_clean()` and `create`
+        # right after. The idea is to bypass cleaning first to allow getting
+        # an object by e.g. unique fields. In case `full_clean()` invoked before,
+        # it would raise unique constraint validation error
+        instance = model._default_manager.get(**create_kwargs)
+    except model.DoesNotExist:
+        # Creating the instance directly via create() without full-clean will
+        # raise ugly error messages. To generate user-friendly ones, we want
+        # full-clean() to trigger form-validation style error messages.
+        full_clean_options = full_clean if isinstance(full_clean, dict) else {}
         dummy_instance.full_clean(**full_clean_options)  # type: ignore
 
-    # Create the instance using the manager create method to respect
-    # manager create overrides. This also ensures support for proxy-models.
-    instance = model._default_manager.create(**create_kwargs)
+        # Create the instance using the manager create method to respect
+        # manager create overrides. This also ensures support for proxy-models.
+        instance = model._default_manager.create(**create_kwargs)
 
     for field, value in m2m:
         update_m2m(info, instance, field, value, key_attr)
@@ -552,15 +570,32 @@ def update_m2m(
 
     use_remove = True
     if isinstance(field, ManyToManyField):
-        manager = cast("RelatedManager", getattr(instance, field.attname))
+        remote_field_name = field.attname
+        reverse_field_name = field.remote_field.related_name
     else:
         assert isinstance(field, (ManyToManyRel, ManyToOneRel))
-        accessor_name = field.get_accessor_name()
-        assert accessor_name
-        manager = cast("RelatedManager", getattr(instance, accessor_name))
+        remote_field_name = field.get_accessor_name()
+        reverse_field_name = field.field.name
         if field.one_to_many:
             # remove if field is nullable, otherwise delete
             use_remove = field.remote_field.null is True
+
+    assert remote_field_name
+    assert reverse_field_name
+    manager = cast("RelatedManager", getattr(instance, remote_field_name))
+
+    def create_nested(d):
+        ref_instance = (
+            manager.instance
+            if field.one_to_many or field.one_to_one
+            else [manager.instance]
+        )
+        return create(
+            info,
+            manager.model,
+            d | {reverse_field_name: ref_instance},
+            full_clean=full_clean,
+        )
 
     to_add = []
     to_remove = []
@@ -620,11 +655,7 @@ def update_m2m(
 
                 existing.discard(obj)
             else:
-                if key_attr not in data:  # we have a Input Type
-                    obj, _ = manager.get_or_create(**data)
-                else:
-                    data.pop(key_attr)
-                    obj = manager.create(**data)
+                obj = create_nested(data)
 
                 if full_clean:
                     obj.full_clean(**full_clean_options)
@@ -655,11 +686,7 @@ def update_m2m(
                 data.pop(key_attr, None)
                 to_add.append(obj)
             elif data:
-                if key_attr not in data:
-                    manager.get_or_create(**data)
-                else:
-                    data.pop(key_attr)
-                    manager.create(**data)
+                create_nested(data)
             else:
                 raise AssertionError
 

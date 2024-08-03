@@ -17,6 +17,12 @@ type AssigneeType implements Node {
   owner: Boolean!
 }
 
+type BugReproductionType implements Node {
+  """The Globally Unique ID of this object"""
+  id: GlobalID!
+  description: String!
+}
+
 union CreateIssuePayload = IssueType | OperationInfo
 
 """Date (isoformat)"""
@@ -74,7 +80,6 @@ input IssueFilter {
 
 input IssueInputSubclass {
   name: String!
-  milestone: MilestoneInputPartial!
   priority: Int
   kind: String
   tags: [NodeInput!]
@@ -110,6 +115,8 @@ type IssueType implements Node & Named {
     """Returns the items in the list that come after the specified cursor."""
     last: Int = null
   ): FavoriteTypeConnection!
+  versions: [VersionType!]!
+  bugReproduction: BugReproductionType!
   milestoneName: String!
   milestoneNameWithoutOnlyOptimization: String!
   privateName: String
@@ -144,11 +151,6 @@ input MilestoneFilter {
   OR: MilestoneFilter
   NOT: MilestoneFilter
   DISTINCT: Boolean
-}
-
-input MilestoneInputPartial {
-  id: GlobalID
-  name: String
 }
 
 input MilestoneOrder {
@@ -412,4 +414,10 @@ type UserType implements Node {
   isSuperuser: Boolean!
   isStaff: Boolean!
   fullName: String!
+}
+
+type VersionType implements Node {
+  """The Globally Unique ID of this object"""
+  id: GlobalID!
+  name: String!
 }
