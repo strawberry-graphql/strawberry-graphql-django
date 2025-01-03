@@ -1,11 +1,11 @@
 from django.db import models
-from mptt.fields import TreeForeignKey
-from mptt.models import MPTTModel
+from tree_queries.fields import TreeNodeForeignKey
+from tree_queries.models import TreeNode
 
 
-class MPTTAuthor(MPTTModel):
+class TreeNodeAuthor(TreeNode):
     name = models.CharField(max_length=100)
-    parent = TreeForeignKey(
+    parent = TreeNodeForeignKey(
         to="self",
         on_delete=models.CASCADE,
         null=True,
@@ -14,10 +14,10 @@ class MPTTAuthor(MPTTModel):
     )
 
 
-class MPTTBook(models.Model):
+class TreeNodeBook(models.Model):
     title = models.CharField(max_length=100)
     author = models.ForeignKey(
-        MPTTAuthor,
+        TreeNodeAuthor,
         on_delete=models.CASCADE,
         related_name="books",
     )
